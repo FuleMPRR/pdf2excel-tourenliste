@@ -21,10 +21,8 @@ def extract_phones(text: str) -> str:
     Extrahiert Telefonnummern robust aus einem Textblock.
     Akzeptiert +41..., 0041..., 071..., 079... etc.
     """
-    # grob, aber brauchbar
     phones = re.findall(r"(?:\+|00)?\d[\d\s]{7,}\d", text)
     phones = [normalize_spaces(p) for p in phones]
-    # Duplikate entfernen, Reihenfolge behalten
     seen = set()
     out = []
     for p in phones:
@@ -38,7 +36,6 @@ def extract_contact_name(text: str) -> str:
     """
     Nimmt den Teil vor der ersten erkannten Telefonnummer als Name.
     """
-    # finde erste Tel-Position
     m = re.search(r"(?:\+|00)?\d[\d\s]{7,}\d", text)
     if not m:
         return ""
@@ -54,11 +51,6 @@ def extract_article(text: str) -> str:
 
 
 def split_plz_ort(text: str) -> str:
-    """
-    Nimmt den ersten PLZ/Ort-Teil (4-stellige PLZ + Ort).
-    Gibt z.B. '8583 Sulgen' zurueck.
-    """
-    # Beispiel: "... Kradolfstrasse 54 8583 Sulgen KB Werkstatt ..."
     m = re.search(r"\b(\d{4})\s+([A-Za-zÄÖÜäöü\-]+(?:\s+[A-Za-zÄÖÜäöü\-]+)*)\b", text)
     if not m:
         return ""
@@ -66,11 +58,6 @@ def split_plz_ort(text: str) -> str:
 
 
 def extract_street(text: str) -> str:
-    """
-    Findet eine Strasse (typisch: '...strasse 54', 'Kirchplatz 5', 'Dorfstrasse 1a', 'Hintertschwil' etc.)
-    Heuristik: nimm den Teil, der vor PLZ kommt und 'strasse/platz/weg' enthaelt ODER ein Wort + Hausnr.
-    """
-    # Teil vor PLZ (falls vorhanden)
     plz_pos = None
     m_plz = re.search(r"\b\d{4}\b", text)
     if m_plz:
@@ -79,19 +66,18 @@ def extract_street(text: str) -> str:
 
     pre = normalize_spaces(pre)
 
-    # Suche typische Muster
-    m1 = re.search(r"\b([A-Za-zÄÖÜäöü\-]+(?:strasse|straße|weg|platz|gasse|ring|allee))\s+\d+\w?\b", pre, re.IGNORECASE)
+    m1 = re.search(
+        r"\b([A-Za-zÄÖÜäöü\-]+(?:strasse|straße|weg|platz|gasse|ring|allee))\s+\d+\w?\b",
+        pre,
+        re.IGNORECASE,
+    )
     if m1:
-        # nimm ab dem Start dieses Musters bis Ende von pre
         return normalize_spaces(pre[m1.start():])
 
-    # Alternative: letztes "Wort + Hausnr" im pre
     m2 = re.search(r"([A-Za-zÄÖÜäöü\-]+\s+\d+\w?)\s*$", pre)
     if m2:
         return normalize_spaces(m2.group(1))
 
-    # Falls z.B. nur Orts-/Weilername ohne Nummer (Hintertschwil)
-    # nimm letzten Teil, wenn er nicht nach Tel aussieht
     if pre and len(pre.split()) <= 4:
         return pre
 
@@ -120,10 +106,7 @@ def parse_records_from_text(lines):
             continue
         if line.startswith("Firma Ansprech"):
             continue
-        if line.startswith("Tour ") and "Gesamt" in line:
-            continue
-        if line.startswith("Tour ") and "Gesamt" not in line:
-            # z.B. "Tourenliste per: Woche 7 Tour: 86" (manchmal als Tour)
+        if line.startswith("Tour "):
             continue
         if "Seite:" in line:
             continue
@@ -143,32 +126,26 @@ def parse_block(block_lines):
     """
     end_re = re.compile(r"^(?P<pre>.*?)(?P<pos>\d+/\d+\.\d+)\s+(?P<adr>\d+)\s+(?P<rh>\d+)\s*$")
 
-    # Record-Text
     full = normalize_spaces(" ".join(block_lines))
 
-    # Position Box / Adr / Rhyt
     pos_box = ""
     adr = ""
     rh = ""
 
-    # Suche die Zeile mit dem Endmarker (normalerweise letzte)
     last = block_lines[-1]
     m_end = end_re.match(last)
     if m_end:
         pos_box = m_end.group("pos")
         adr = m_end.group("adr")
         rh = m_end.group("rh")
-        pre_last = normalize_spaces(m_end.group("pre"))
-    else:
-        pre_last = ""
 
-    # Firma: in deiner Liste ist sie praktisch immer die erste Zeile
-    firma = normalize_spaces(block_lines[0])
+    # Firma ist in deiner Liste praktisch immer die erste Zeile
+    firma_raw = normalize_spaces(block_lines[0])
 
     # Entferne reine Nummern-Zeilen (z.B. 8689, 8592) aus dem Block fuer Analyse
     cleaned_lines = [l for l in block_lines[1:] if not re.fullmatch(r"\d{2,6}", l.strip())]
 
-    # Ansprechpartner / Telefon: suche die erste Zeile mit einer Telefonnummer
+    # Ansprechpartner / Telefon: erste Zeile mit Tel
     contact_line = ""
     for l in cleaned_lines:
         if re.search(r"(?:\+|00)?\d[\d\s]{7,}\d", l):
@@ -178,15 +155,10 @@ def parse_block(block_lines):
     telefon = extract_phones(contact_line) if contact_line else extract_phones(full)
     ansprech = extract_contact_name(contact_line) if contact_line else ""
 
-    # Artikel
+    # Artikel / PLZ / Strasse
     artikel = extract_article(full)
-
-    # PLZ / Ort
     plz_ort = split_plz_ort(full)
 
-    # Strasse
-    # Oft steht Strasse in einer Zeile mit " / " (z.B. "... / Kradolfstrasse 54 8583 Sulgen ...")
-    # Wir versuchen zuerst die Zeilen zu nehmen, die "strasse/platz/weg" enthalten.
     street_candidate = ""
     for l in cleaned_lines:
         if re.search(r"(strasse|straße|weg|platz|gasse|ring|allee)\b", l, re.IGNORECASE):
@@ -194,27 +166,32 @@ def parse_block(block_lines):
             break
     strasse = extract_street(street_candidate if street_candidate else full)
 
-    # Bemerkung:
-    # Nimm alles nach Artikel (falls vorhanden) bis vor PositionBox (im letzten pre-Teil)
+    # Bemerkung: alles nach Artikel (falls vorhanden), sonst fallback
     bemerkung = ""
-
     if artikel:
-        # split ab Artikel
         idx = full.find(artikel)
         after = full[idx + len(artikel):].strip()
-        # PositionBox steht am Ende im last-line; entferne pos/adr/rh
         if pos_box:
-            after = re.sub(rf"\b{re.escape(pos_box)}\b\s+{re.escape(adr)}\s+{re.escape(rh)}\s*$", "", after).strip()
+            after = re.sub(
+                rf"\b{re.escape(pos_box)}\b\s+{re.escape(adr)}\s+{re.escape(rh)}\s*$",
+                "",
+                after,
+            ).strip()
         bemerkung = after
     else:
-        # fallback: nimm pre_last (Teil vor PositionBox) minus bekannte Bestandteile
-        bemerkung = pre_last
+        bemerkung = full
 
     bemerkung = normalize_spaces(bemerkung)
 
+    # ✅ Wunsch: Ansprechperson mit Firma zusammennehmen
+    if ansprech:
+        firma = normalize_spaces(f"{firma_raw} - {ansprech}")
+    else:
+        firma = firma_raw
+
     return {
         "Firma": firma,
-        "Ansprechperson": ansprech,
+        "Ansprechperson": "",  # absichtlich leer, weil in Firma integriert
         "Telefon": telefon,
         "Strasse": strasse,
         "PLZ / Ort": plz_ort,
@@ -227,27 +204,20 @@ def parse_block(block_lines):
 
 
 def parse_tourenliste(pdf_bytes: bytes) -> pd.DataFrame:
-    # Text aus allen Seiten ziehen
     all_lines = []
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
             txt = page.extract_text() or ""
-            lines = txt.split("\n")
-            all_lines.extend(lines)
+            all_lines.extend(txt.split("\n"))
 
-    # Records bilden
     blocks = parse_records_from_text(all_lines)
-
-    # Blocks parsen
     rows = [parse_block(b) for b in blocks]
 
     df = pd.DataFrame(rows)
 
-    # Fix: Leere Firma raus / nur gültige PositionBox
     df["Firma"] = df["Firma"].fillna("").map(normalize_spaces)
     df = df[df["Position Box"].str.match(r"^\d+/\d+\.\d+$", na=False)].reset_index(drop=True)
 
-    # Spaltenreihenfolge fix
     columns = [
         "Firma",
         "Ansprechperson",
@@ -305,4 +275,4 @@ if uploaded:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     else:
-        st.warning("Keine Eintraege erkannt. Falls du willst, poste einen Screenshot der Streamlit-Logs, dann machen wir den Parser noch enger passend.")
+        st.warning("Keine Eintraege erkannt. Wenn du willst, schick einen Screenshot der Streamlit-Logs, dann passen wir den Parser noch enger an.")
